@@ -153,8 +153,6 @@ func (l *StandardLogger) Debug(msg string, args ...any) {
 	l.log(slog.LevelDebug, msg, args...)
 }
 
-// File: logger.go
-
 // Update the log method in StandardLogger to ensure metrics are incremented correctly
 func (l *StandardLogger) log(level slog.Level, msg string, args ...any) {
 	if l.closed.Load() {
@@ -631,16 +629,16 @@ func (w *BufferedWriter) Flush() error {
 	// Send flush request
 	select {
 	case w.flushChan <- respChan:
-		// Wait for flush to complete
+		// Wait for flush to complete with a longer timeout
 		select {
 		case <-respChan:
-			// Additional small delay to ensure writes are visible
-			time.Sleep(time.Millisecond)
+			// Wait for a small duration to ensure writes are processed
+			time.Sleep(10 * time.Millisecond)
 			return nil
-		case <-time.After(time.Second):
+		case <-time.After(2 * time.Second):
 			return fmt.Errorf("flush timeout")
 		}
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(500 * time.Millisecond):
 		return fmt.Errorf("flush channel busy")
 	}
 }
@@ -894,9 +892,18 @@ func (f *JSONFormatter) Format(record LogRecord) ([]byte, error) {
 		}
 	}
 
-	// Add attributes
+	// Process slog.Attr entries
 	for _, attr := range record.Attrs {
-		data[attr.Key] = attr.Value.Any()
+		// Handle group attributes
+		if attr.Value.Kind() == slog.KindGroup {
+			groupData := make(map[string]interface{})
+			for _, groupAttr := range attr.Value.Group() {
+				groupData[groupAttr.Key] = groupAttr.Value.Any()
+			}
+			data[attr.Key] = groupData
+		} else {
+			data[attr.Key] = attr.Value.Any()
+		}
 	}
 
 	return json.Marshal(data)
@@ -921,12 +928,34 @@ func NewTextFormatter() *TextFormatter {
 }
 
 func (f *TextFormatter) Format(record LogRecord) ([]byte, error) {
-	// Simple text format: time [level] message key=value key=value
 	var result []byte
+
+	// Add indentation if specified
+	if f.opts.Indent != "" {
+		result = append(result, f.opts.Indent...)
+	}
+
+	// Add timestamp
 	result = append(result, record.Time.Format(f.opts.TimeFormat)...)
+
+	// Add level with optional color
 	result = append(result, " ["...)
-	result = append(result, record.Level.String()...)
+	if f.opts.UseColor {
+		result = append(result, f.getLevelColor(record.Level)...)
+		result = append(result, record.Level.String()...)
+		result = append(result, "\x1b[0m"...) // Reset color
+	} else {
+		result = append(result, record.Level.String()...)
+	}
 	result = append(result, "] "...)
+
+	// Add source information if available and AddSource is true
+	if record.AddSource && record.Source != "" {
+		result = append(result, record.Source...)
+		result = append(result, " "...)
+	}
+
+	// Add message
 	result = append(result, record.Message...)
 
 	// Add args as key=value pairs
@@ -938,14 +967,33 @@ func (f *TextFormatter) Format(record LogRecord) ([]byte, error) {
 			result = append(result, fmt.Sprint(record.Args[i+1])...)
 		}
 	}
+
+	// Add newline
 	result = append(result, '\n')
 
 	return result, nil
 }
 
+func (f *TextFormatter) getLevelColor(level slog.Level) string {
+	switch level {
+	case slog.LevelDebug:
+		return "\x1b[36m" // Cyan
+	case slog.LevelInfo:
+		return "\x1b[32m" // Green
+	case slog.LevelWarn:
+		return "\x1b[33m" // Yellow
+	case slog.LevelError:
+		return "\x1b[31m" // Red
+	default:
+		return "\x1b[37m" // White
+	}
+}
+
 func (f *TextFormatter) WithOptions(opts FormatterOptions) Formatter {
-	f.opts = opts
-	return f
+	newFormatter := &TextFormatter{
+		opts: opts,
+	}
+	return newFormatter
 }
 
 // StandardRotationManager implements RotationManager

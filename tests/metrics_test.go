@@ -6,6 +6,7 @@ import (
 	"github.com/baditaflorin/l"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"io"
 	"testing"
 	"time"
 )
@@ -200,17 +201,30 @@ func TestConcurrentMetricsCollection(t *testing.T) {
 	assert.Equal(t, expectedErrors, metrics.ErrorMessages)
 }
 
-func TestMetricsWithHealthCheck(t *testing.T) {
+// testLogger creates a logger that writes to the provided writer
+func testLogger(t *testing.T, w io.Writer) (l.Logger, l.MetricsCollector) {
 	factory := l.NewStandardFactory()
 	config := l.Config{
+		Output:     w,
 		JsonFormat: true,
 		Metrics:    true,
 	}
 
 	logger, err := factory.CreateLogger(config)
 	require.NoError(t, err)
+
+	collector, err := factory.CreateMetricsCollector(config)
+	require.NoError(t, err)
+
+	return logger, collector
+}
+
+func TestMetricsWithHealthCheck(t *testing.T) {
+	// Use io.Discard to suppress output
+	logger, collector := testLogger(t, io.Discard)
 	defer logger.Close()
 
+	factory := l.NewStandardFactory()
 	healthChecker, err := factory.CreateHealthChecker(logger)
 	require.NoError(t, err)
 
@@ -233,13 +247,31 @@ func TestMetricsWithHealthCheck(t *testing.T) {
 	// Wait for metrics to be updated
 	time.Sleep(100 * time.Millisecond)
 
-	// Verify metrics are being collected
-	collector, err := factory.CreateMetricsCollector(config)
-	require.NoError(t, err)
+	// Verify metrics were collected
 	metrics := collector.GetMetrics()
+	assert.True(t, metrics.TotalMessages >= 100, "Expected at least 100 total messages")
+	assert.True(t, metrics.ErrorMessages >= 10, "Expected at least 10 error messages")
+}
 
-	assert.True(t, metrics.TotalMessages >= 100)
-	assert.True(t, metrics.ErrorMessages >= 10)
+// Example of how to test with captured output
+func TestWithCapturedOutput(t *testing.T) {
+	var buf bytes.Buffer
+	logger, collector := testLogger(t, &buf)
+	defer logger.Close()
+
+	// Write a test message
+	logger.Info("test message", "key", "value")
+
+	// Verify output contains expected content
+	output := buf.String()
+	assert.Contains(t, output, "test message")
+	assert.Contains(t, output, "key")
+	assert.Contains(t, output, "value")
+
+	// Verify metrics
+	metrics := collector.GetMetrics()
+	assert.Equal(t, uint64(1), metrics.TotalMessages)
+	assert.Equal(t, uint64(0), metrics.ErrorMessages)
 }
 
 func TestMetricsReset(t *testing.T) {

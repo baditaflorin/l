@@ -3,11 +3,14 @@ package tests
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/baditaflorin/l"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -30,43 +33,153 @@ func TestBufferedWriter(t *testing.T) {
 	var buf bytes.Buffer
 	writer := l.NewBufferedWriter(&buf, 1024)
 
-	// Test single write
-	testData := []byte("test message\n")
-	n, err := writer.Write(testData)
-	assert.NoError(t, err)
-	assert.Equal(t, len(testData), n)
-
-	// Flush and verify
-	err = writer.Flush()
-	assert.NoError(t, err)
-	assert.Contains(t, buf.String(), "test message")
-
-	// Test multiple concurrent writes
-	done := make(chan bool)
-	messages := 100
-	for i := 0; i < 5; i++ {
-		go func() {
-			for j := 0; j < messages; j++ {
-				_, _ = writer.Write([]byte("concurrent message\n"))
+	// Helper function to verify content with retries
+	verifyContent := func(expected string, timeout time.Duration) bool {
+		deadline := time.Now().Add(timeout)
+		for time.Now().Before(deadline) {
+			err := writer.Flush()
+			assert.NoError(t, err)
+			if strings.Contains(buf.String(), expected) {
+				return true
 			}
-			done <- true
-		}()
+			time.Sleep(50 * time.Millisecond)
+		}
+		return false
 	}
 
-	// Wait for all writes to complete
-	for i := 0; i < 5; i++ {
-		<-done
-	}
+	t.Run("Single Write", func(t *testing.T) {
+		buf.Reset()
+		testData := []byte("test message\n")
+		n, err := writer.Write(testData)
+		assert.NoError(t, err)
+		assert.Equal(t, len(testData), n)
 
-	// Flush and close
-	err = writer.Flush()
+		success := verifyContent("test message", time.Second)
+		assert.True(t, success, "Expected content not found after timeout")
+	})
+
+	t.Run("Multiple Sequential Writes", func(t *testing.T) {
+		buf.Reset()
+		for i := 0; i < 10; i++ {
+			data := []byte(fmt.Sprintf("message %d\n", i))
+			_, err := writer.Write(data)
+			assert.NoError(t, err)
+		}
+
+		success := verifyContent("message 9", time.Second)
+		assert.True(t, success, "Expected content not found after timeout")
+		assert.Equal(t, 10, bytes.Count(buf.Bytes(), []byte("\n")))
+	})
+
+	t.Run("Concurrent Writes", func(t *testing.T) {
+		buf.Reset()
+		var wg sync.WaitGroup
+		numGoroutines := 5
+		messagesPerRoutine := 100
+
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
+			go func(routineID int) {
+				defer wg.Done()
+				for j := 0; j < messagesPerRoutine; j++ {
+					msg := fmt.Sprintf("routine-%d-msg-%d\n", routineID, j)
+					_, err := writer.Write([]byte(msg))
+					assert.NoError(t, err)
+				}
+			}(i)
+		}
+
+		wg.Wait()
+		err := writer.Flush()
+		assert.NoError(t, err)
+		time.Sleep(100 * time.Millisecond) // Give extra time for flush to complete
+
+		totalExpectedLines := numGoroutines * messagesPerRoutine
+		actualLines := bytes.Count(buf.Bytes(), []byte("\n"))
+		assert.Equal(t, totalExpectedLines, actualLines,
+			"Expected %d lines but got %d", totalExpectedLines, actualLines)
+	})
+
+	t.Run("Write After Close", func(t *testing.T) {
+		buf.Reset()
+		newWriter := l.NewBufferedWriter(&buf, 1024)
+		testData := []byte("test before close\n")
+		_, err := newWriter.Write(testData)
+		assert.NoError(t, err)
+
+		err = newWriter.Flush()
+		assert.NoError(t, err)
+
+		err = newWriter.Close()
+		assert.NoError(t, err)
+
+		// Try writing after close
+		_, err = newWriter.Write([]byte("test after close\n"))
+		assert.Error(t, err, "Write after close should return error")
+		assert.Contains(t, err.Error(), "closed")
+	})
+
+	t.Run("Large Write Test", func(t *testing.T) {
+		buf.Reset()
+		largeData := bytes.Repeat([]byte("a"), 1000000) // 1MB of data
+		n, err := writer.Write(largeData)
+		assert.NoError(t, err)
+		assert.Equal(t, len(largeData), n)
+
+		err = writer.Flush()
+		assert.NoError(t, err)
+		assert.Equal(t, len(largeData), buf.Len())
+	})
+
+	t.Run("Buffer Full Behavior", func(t *testing.T) {
+		buf.Reset()
+		// Create a writer with a very small buffer
+		smallWriter := l.NewBufferedWriter(&buf, 10) // Very small buffer
+
+		// Write multiple chunks of data
+		for i := 0; i < 10; i++ {
+			data := []byte(fmt.Sprintf("chunk-%d\n", i))
+			n, err := smallWriter.Write(data)
+			assert.NoError(t, err, "Write should succeed even with full buffer")
+			assert.Equal(t, len(data), n, "Should write all bytes")
+		}
+
+		// Give some time for async writes to complete
+		time.Sleep(100 * time.Millisecond)
+
+		err := smallWriter.Flush()
+		assert.NoError(t, err, "Flush should succeed")
+
+		// Verify all data was written
+		content := buf.String()
+		for i := 0; i < 10; i++ {
+			expectedChunk := fmt.Sprintf("chunk-%d\n", i)
+			assert.Contains(t, content, expectedChunk,
+				"Output should contain chunk %d", i)
+		}
+
+		// Try a large write that exceeds buffer size
+		largeData := bytes.Repeat([]byte("b"), 1000)
+		n, err := smallWriter.Write(largeData)
+		assert.NoError(t, err, "Large write should succeed")
+		assert.Equal(t, len(largeData), n, "Should write all bytes of large write")
+
+		err = smallWriter.Flush()
+		assert.NoError(t, err, "Final flush should succeed")
+
+		// Verify the large write was completed
+		assert.True(t, bytes.Contains(buf.Bytes(), bytes.Repeat([]byte("b"), 1000)),
+			"Output should contain the large write")
+
+		err = smallWriter.Close()
+		assert.NoError(t, err, "Close should succeed")
+	})
+
+	// Cleanup
+	err := writer.Flush()
 	assert.NoError(t, err)
 	err = writer.Close()
 	assert.NoError(t, err)
-
-	// Verify total messages
-	lines := bytes.Count(buf.Bytes(), []byte("\n"))
-	assert.Equal(t, 5*messages+1, lines) // +1 for the initial test message
 }
 
 func TestFileWriter(t *testing.T) {
