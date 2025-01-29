@@ -14,6 +14,8 @@ type Pool struct {
 	wg      sync.WaitGroup
 	ctx     context.Context
 	cancel  context.CancelFunc
+	closed  bool
+	mu      sync.RWMutex
 }
 
 func NewPool(workers int, logger l.Logger) *Pool {
@@ -37,7 +39,6 @@ func NewPool(workers int, logger l.Logger) *Pool {
 func (p *Pool) worker(id int) {
 	defer p.wg.Done()
 
-	// Create worker-specific logger
 	workerLogger := p.logger.With("worker_id", id)
 	workerLogger.Info("Worker started")
 	defer workerLogger.Info("Worker stopped")
@@ -74,6 +75,13 @@ func (p *Pool) worker(id int) {
 }
 
 func (p *Pool) Submit(job int) error {
+	p.mu.RLock()
+	if p.closed {
+		p.mu.RUnlock()
+		return context.Canceled
+	}
+	p.mu.RUnlock()
+
 	select {
 	case <-p.ctx.Done():
 		return context.Canceled
@@ -83,6 +91,14 @@ func (p *Pool) Submit(job int) error {
 }
 
 func (p *Pool) Stop() {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	p.closed = true
+	p.mu.Unlock()
+
 	// Signal shutdown
 	p.cancel()
 

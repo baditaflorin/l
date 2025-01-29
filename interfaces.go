@@ -17,6 +17,8 @@ type Logger interface {
 	Warn(msg string, args ...any)
 	Debug(msg string, args ...any)
 	With(args ...any) Logger
+	WithFields(fields map[string]interface{}) Logger // Add this
+	GetFields() map[string]interface{}               // Add this
 	Flush() error
 	Close() error
 	GetContext() context.Context

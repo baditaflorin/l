@@ -3,6 +3,7 @@ package main
 
 import (
 	"github.com/baditaflorin/l"
+	"io"
 	"os"
 	"time"
 )
@@ -10,7 +11,7 @@ import (
 func main() {
 	// Create custom configuration
 	config := l.Config{
-		Output:      os.Stdout, // Ensure we're writing to stdout
+		Output:      io.Discard,
 		FilePath:    "logs/app.log",
 		JsonFormat:  true,
 		AsyncWrite:  true,

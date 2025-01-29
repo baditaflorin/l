@@ -56,9 +56,10 @@ func TestLoggerBasicFunctionality(t *testing.T) {
 			extraVal: float64(500),
 		},
 		{
-			name:     "Warning logging",
-			logFunc:  logger.Warn,
-			message:  "test warning message",
+			name:    "Warning logging",
+			logFunc: logger.Warn,
+			message: "" +
+				"test warning message",
 			level:    "WARN",
 			extraKey: "warning_type",
 			extraVal: "resource_low",

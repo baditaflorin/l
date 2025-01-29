@@ -752,7 +752,9 @@ func (h *StandardErrorHandler) WithRecovery(fn func() error) (err error) {
 type StandardHealthChecker struct {
 	logger   Logger
 	stopChan chan struct{}
+	stopped  atomic.Bool
 	wg       sync.WaitGroup
+	mu       sync.Mutex
 }
 
 func NewStandardHealthChecker(logger Logger) *StandardHealthChecker {
@@ -763,6 +765,13 @@ func NewStandardHealthChecker(logger Logger) *StandardHealthChecker {
 }
 
 func (h *StandardHealthChecker) Start(ctx context.Context) {
+	h.mu.Lock()
+	if h.stopped.Load() {
+		h.stopChan = make(chan struct{})
+		h.stopped.Store(false)
+	}
+	h.mu.Unlock()
+
 	h.wg.Add(1)
 	go h.checkLoop(ctx)
 }
@@ -795,8 +804,14 @@ func (h *StandardHealthChecker) Check() error {
 }
 
 func (h *StandardHealthChecker) Stop() {
-	close(h.stopChan)
-	h.wg.Wait()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if !h.stopped.Load() {
+		close(h.stopChan)
+		h.stopped.Store(true)
+		h.wg.Wait()
+	}
 }
 
 // Handler Wrapper implementation
@@ -953,7 +968,6 @@ func (f *TextFormatter) Format(record LogRecord) ([]byte, error) {
 		result = append(result, f.opts.Indent...)
 	}
 
-	// Add timestamp
 	result = append(result, record.Time.Format(f.opts.TimeFormat)...)
 
 	// Add level with optional color
