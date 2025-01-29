@@ -35,31 +35,32 @@ type StandardLogger struct {
 
 // NewStandardLogger creates a new logger instance using the provided factory
 func NewStandardLogger(factory Factory, config Config) (Logger, error) {
-	// Validate configuration
-	if err := validateConfig(config); err != nil {
+	if err := validateConfig(&config); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
-	// Create context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Initialize logger with basic fields
-	// Create metrics collector first
-	metrics, err := factory.CreateMetricsCollector(config)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to create metrics collector: %w", err)
+	// Ensure we have an output writer
+	if config.Output == nil {
+		config.Output = os.Stdout
 	}
 
-	// Initialize logger with metrics
 	logger := &StandardLogger{
 		config:  config,
 		ctx:     ctx,
 		cancel:  cancel,
 		fields:  make(map[string]interface{}),
 		isAsync: config.AsyncWrite,
-		metrics: metrics, // Set metrics here
 	}
+
+	// Create metrics collector first
+	metrics, err := factory.CreateMetricsCollector(config)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create metrics collector: %w", err)
+	}
+	logger.metrics = metrics
 
 	// Set up writer
 	var baseWriter Writer
@@ -68,14 +69,26 @@ func NewStandardLogger(factory Factory, config Config) (Logger, error) {
 		logger.asyncWriter = bufferedWriter
 		baseWriter = bufferedWriter
 	} else {
-		var err error
 		baseWriter, err = factory.CreateWriter(config)
 		if err != nil {
-			cancel() // Clean up context if writer creation fails
+			cancel()
 			return nil, fmt.Errorf("failed to create writer: %w", err)
 		}
 	}
 	logger.writer = baseWriter
+
+	// Create and configure the handler
+	var baseHandler slog.Handler
+	handlerOpts := &slog.HandlerOptions{
+		Level:     config.MinLevel,
+		AddSource: config.AddSource,
+	}
+
+	if config.JsonFormat {
+		baseHandler = slog.NewJSONHandler(logger.writer, handlerOpts)
+	} else {
+		baseHandler = slog.NewTextHandler(logger.writer, handlerOpts)
+	}
 
 	// Create error handler
 	errHandler, err := factory.CreateErrorHandler(config)
@@ -85,46 +98,16 @@ func NewStandardLogger(factory Factory, config Config) (Logger, error) {
 	}
 	logger.errHandler = errHandler
 
-	// Create base slog.Handler
-	var baseHandler slog.Handler
-	if config.JsonFormat {
-		baseHandler = slog.NewJSONHandler(logger.writer, &slog.HandlerOptions{
-			Level:     config.MinLevel,
-			AddSource: config.AddSource,
-		})
-	} else {
-		baseHandler = slog.NewTextHandler(logger.writer, &slog.HandlerOptions{
-			Level:     config.MinLevel,
-			AddSource: config.AddSource,
-		})
-	}
-
 	// Create handler wrapper
 	logger.handler = factory.CreateHandlerWrapper(baseHandler, logger.writer)
-
-	// Initialize health checker if metrics are enabled
-	if config.Metrics {
-		healthChecker, err := factory.CreateHealthChecker(logger)
-		if err != nil {
-			cancel()
-			return nil, fmt.Errorf("failed to create health checker: %w", err)
-		}
-		logger.healthCheck = healthChecker
-		go healthChecker.Start(ctx)
-	}
-
-	// If no output is specified, use stdout
-	if config.Output == nil {
-		config.Output = os.Stdout
-	}
 
 	return logger, nil
 }
 
 // validateConfig validates the logger configuration
-func validateConfig(config Config) error {
-	if config.BufferSize < 0 {
-		return fmt.Errorf("buffer size must be non-negative")
+func validateConfig(config *Config) error {
+	if config.BufferSize <= 0 {
+		config.BufferSize = 1024 * 1024 // Set default buffer size to 1MB
 	}
 	if config.MaxFileSize < 0 {
 		return fmt.Errorf("max file size must be non-negative")
@@ -306,6 +289,9 @@ func (l *StandardLogger) WithContext(ctx context.Context) Logger {
 		config:      l.config,
 		fields:      l.fields,
 		ctx:         ctx,
+		cancel:      l.cancel,
+		isAsync:     l.isAsync,
+		asyncWriter: l.asyncWriter,
 	}
 	return newLogger
 }
@@ -499,6 +485,10 @@ type BufferedWriter struct {
 }
 
 func NewBufferedWriter(out io.Writer, bufferSize int) *BufferedWriter {
+	if out == nil {
+		out = os.Stdout // Use stdout as default output
+	}
+
 	if bufferSize <= 0 {
 		bufferSize = 1024 * 1024 // 1MB default
 	}
@@ -509,6 +499,7 @@ func NewBufferedWriter(out io.Writer, bufferSize int) *BufferedWriter {
 		done:      make(chan struct{}),
 		batchSize: 1000,
 		flushChan: make(chan chan struct{}, 1),
+		mu:        sync.Mutex{},
 	}
 
 	w.wg.Add(1)
@@ -565,39 +556,66 @@ func (w *BufferedWriter) flushBatch(batch [][]byte) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	if w.out == nil {
+		return
+	}
+
 	// Calculate total length needed
 	totalLen := 0
 	for _, msg := range batch {
-		totalLen += len(msg)
+		if msg != nil {
+			totalLen += len(msg)
+		}
 	}
 
 	// Create a single buffer for all messages
 	combined := make([]byte, 0, totalLen)
 	for _, msg := range batch {
-		combined = append(combined, msg...)
+		if msg != nil {
+			combined = append(combined, msg...)
+		}
 	}
 
-	// Write everything at once
-	w.out.Write(combined)
+	// Write everything at once if we have data
+	if len(combined) > 0 {
+		w.out.Write(combined)
+	}
 }
 
+// Update the Write method in BufferedWriter to handle large messages better
 func (w *BufferedWriter) Write(p []byte) (n int, err error) {
 	if w.closed.Load() {
 		return 0, fmt.Errorf("writer is closed")
 	}
 
+	// Ensure we have a valid writer
+	w.mu.Lock()
+	if w.out == nil {
+		w.mu.Unlock()
+		return 0, fmt.Errorf("no output writer available")
+	}
+	w.mu.Unlock()
+
 	// Create a copy of the data to prevent modification
 	data := make([]byte, len(p))
 	copy(data, p)
 
+	// If message is larger than buffer capacity, write directly
+	if len(data) > cap(w.buf) {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return w.out.Write(data)
+	}
+
+	// Try to write to buffer with timeout
 	select {
 	case w.buf <- data:
 		return len(p), nil
 	default:
-		// If buffer is full, write directly
+		// Buffer is full, write directly
 		w.mu.Lock()
 		defer w.mu.Unlock()
-		return w.out.Write(p)
+		return w.out.Write(data)
 	}
 }
 

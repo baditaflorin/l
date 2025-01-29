@@ -19,8 +19,8 @@ type Logger interface {
 	With(args ...any) Logger
 	Flush() error
 	Close() error
-	GetContext() context.Context // Add this method
-
+	GetContext() context.Context
+	WithContext(ctx context.Context) Logger
 }
 
 // Writer defines the interface for log output handling with lifecycle management
