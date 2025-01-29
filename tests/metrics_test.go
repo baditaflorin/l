@@ -2,6 +2,7 @@
 package tests
 
 import (
+	"bytes"
 	"github.com/baditaflorin/l"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -85,21 +86,23 @@ func TestErrorHandler(t *testing.T) {
 }
 
 func TestLoggerWithMetrics(t *testing.T) {
+	var buf bytes.Buffer
 	factory := l.NewStandardFactory()
 	config := l.Config{
+		Output:     &buf,
 		JsonFormat: true,
 		Metrics:    true,
 	}
 
+	// Create the logger first
 	logger, err := factory.CreateLogger(config)
 	require.NoError(t, err)
 	defer logger.Close()
 
-	// Create metrics collector
+	// Get the metrics collector from the factory - this ensures we use the same one
 	collector, err := factory.CreateMetricsCollector(config)
 	require.NoError(t, err)
 
-	// Test various logging scenarios
 	testCases := []struct {
 		name           string
 		logFunc        func()
@@ -138,10 +141,16 @@ func TestLoggerWithMetrics(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			collector.Reset()
+			buf.Reset()
+			collector.Reset() // Reset metrics before each test case
+
 			tc.logFunc()
 
-			// Wait for async operations
+			// Ensure logs are flushed and processed
+			err = logger.Flush()
+			require.NoError(t, err)
+
+			// Wait for any async operations
 			time.Sleep(100 * time.Millisecond)
 
 			metrics := collector.GetMetrics()

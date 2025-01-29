@@ -30,53 +30,54 @@ type StandardLogger struct {
 	mu          sync.RWMutex
 	asyncWriter *BufferedWriter
 	isAsync     bool
+	closed      atomic.Bool // Add closed field
 }
 
 // NewStandardLogger creates a new logger instance using the provided factory
 func NewStandardLogger(factory Factory, config Config) (Logger, error) {
+	// Validate configuration
 	if err := validateConfig(config); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
+	// Create context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Initialize logger with basic fields
+	// Create metrics collector first
+	metrics, err := factory.CreateMetricsCollector(config)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create metrics collector: %w", err)
+	}
+
+	// Initialize logger with metrics
 	logger := &StandardLogger{
 		config:  config,
 		ctx:     ctx,
 		cancel:  cancel,
 		fields:  make(map[string]interface{}),
 		isAsync: config.AsyncWrite,
+		metrics: metrics, // Set metrics here
 	}
 
-	// Fix: Declare err variable before use
-	var err error
+	// Set up writer
 	var baseWriter Writer
 	if config.AsyncWrite {
 		bufferedWriter := NewBufferedWriter(config.Output, config.BufferSize)
 		logger.asyncWriter = bufferedWriter
 		baseWriter = bufferedWriter
 	} else {
+		var err error
 		baseWriter, err = factory.CreateWriter(config)
 		if err != nil {
-			cancel()
+			cancel() // Clean up context if writer creation fails
 			return nil, fmt.Errorf("failed to create writer: %w", err)
 		}
 	}
 	logger.writer = baseWriter
 
-	metrics, err := factory.CreateMetricsCollector(config)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to create metrics collector: %w", err)
-	}
-	logger.metrics = metrics
-
-	_, err = factory.CreateFormatter(config)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to create formatter: %w", err)
-	}
-
+	// Create error handler
 	errHandler, err := factory.CreateErrorHandler(config)
 	if err != nil {
 		cancel()
@@ -98,7 +99,7 @@ func NewStandardLogger(factory Factory, config Config) (Logger, error) {
 		})
 	}
 
-	// Fix: Use logger.writer instead of undefined writer variable
+	// Create handler wrapper
 	logger.handler = factory.CreateHandlerWrapper(baseHandler, logger.writer)
 
 	// Initialize health checker if metrics are enabled
@@ -112,7 +113,26 @@ func NewStandardLogger(factory Factory, config Config) (Logger, error) {
 		go healthChecker.Start(ctx)
 	}
 
+	// If no output is specified, use stdout
+	if config.Output == nil {
+		config.Output = os.Stdout
+	}
+
 	return logger, nil
+}
+
+// validateConfig validates the logger configuration
+func validateConfig(config Config) error {
+	if config.BufferSize < 0 {
+		return fmt.Errorf("buffer size must be non-negative")
+	}
+	if config.MaxFileSize < 0 {
+		return fmt.Errorf("max file size must be non-negative")
+	}
+	if config.MaxBackups < 0 {
+		return fmt.Errorf("max backups must be non-negative")
+	}
+	return nil
 }
 
 // Logger interface implementation
@@ -121,7 +141,6 @@ func (l *StandardLogger) Info(msg string, args ...any) {
 }
 
 func (l *StandardLogger) Error(msg string, args ...any) {
-	l.metrics.IncrementErrors()
 	args = l.enrichErrorArgs(args...)
 	l.log(slog.LevelError, msg, args...)
 }
@@ -134,33 +153,47 @@ func (l *StandardLogger) Debug(msg string, args ...any) {
 	l.log(slog.LevelDebug, msg, args...)
 }
 
-func (l *StandardLogger) log(level slog.Level, msg string, args ...any) {
-	l.metrics.IncrementTotal()
+// File: logger.go
 
-	// Create slog.Record with basic info
+// Update the log method in StandardLogger to ensure metrics are incremented correctly
+func (l *StandardLogger) log(level slog.Level, msg string, args ...any) {
+	if l.closed.Load() {
+		return
+	}
+
+	// Use atomic operations for metrics
+	if l.metrics != nil {
+		l.metrics.IncrementTotal()
+		if level == slog.LevelError {
+			l.metrics.IncrementErrors()
+			l.metrics.SetLastError(time.Now())
+		}
+	}
+
+	// Create record
 	r := slog.Record{
 		Time:    time.Now(),
 		Level:   level,
 		Message: msg,
 	}
 
-	// Add fields from context
+	// Add fields
 	l.mu.RLock()
 	for k, v := range l.fields {
 		r.Add(slog.Any(k, v))
 	}
 	l.mu.RUnlock()
 
-	// Add the args as attributes
+	// Add args
 	for i := 0; i < len(args)-1; i += 2 {
 		if key, ok := args[i].(string); ok {
 			r.Add(slog.Any(key, args[i+1]))
 		}
 	}
 
+	// Handle the log
 	err := l.errHandler.WithRecovery(func() error {
 		if l.isAsync {
-			// For async writing, don't wait for handler completion
 			go func() {
 				if err := l.handler.Handle(l.ctx, r); err != nil {
 					l.errHandler.Handle(err)
@@ -239,13 +272,17 @@ func (l *StandardLogger) Flush() error {
 }
 
 func (l *StandardLogger) Close() error {
+	if !l.closed.CompareAndSwap(false, true) {
+		return nil // Already closed
+	}
+
 	l.cancel() // Cancel context
 
 	if l.healthCheck != nil {
 		l.healthCheck.Stop()
 	}
 
-	// Flush and close writer
+	// Flush before closing
 	if err := l.Flush(); err != nil {
 		return fmt.Errorf("flush failed during close: %w", err)
 	}
@@ -257,7 +294,7 @@ func (l *StandardLogger) Close() error {
 		}
 	}
 
-	return l.writer.Close()
+	return nil
 }
 
 // Implement ContextProvider interface
@@ -299,30 +336,78 @@ func (l *StandardLogger) GetFields() map[string]interface{} {
 	return fields
 }
 
-func validateConfig(config Config) error {
-	if config.BufferSize < 0 {
-		return fmt.Errorf("buffer size must be non-negative")
-	}
-	if config.MaxFileSize < 0 {
-		return fmt.Errorf("max file size must be non-negative")
-	}
-	if config.MaxBackups < 0 {
-		return fmt.Errorf("max backups must be non-negative")
-	}
-	return nil
-}
-
 // StandardFactory implements the Factory interface
 type StandardFactory struct {
-	mu sync.RWMutex
+	mu               sync.RWMutex
+	metricsCollector MetricsCollector
 }
 
 func NewStandardFactory() Factory {
-	return &StandardFactory{}
+	return &StandardFactory{
+		metricsCollector: NewStandardMetricsCollector(),
+	}
 }
 
+// Modify the CreateLogger method in StandardFactory
 func (f *StandardFactory) CreateLogger(config Config) (Logger, error) {
-	return NewStandardLogger(f, config)
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	// Use the factory's metrics collector
+	metrics := f.metricsCollector
+
+	logger := &StandardLogger{
+		config:  config,
+		metrics: metrics,
+		fields:  make(map[string]interface{}),
+		isAsync: config.AsyncWrite,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	logger.ctx = ctx
+	logger.cancel = cancel
+
+	// Create and configure the writer
+	var baseWriter Writer
+	if config.AsyncWrite {
+		bufferedWriter := NewBufferedWriter(config.Output, config.BufferSize)
+		logger.asyncWriter = bufferedWriter
+		baseWriter = bufferedWriter
+	} else {
+		var err error
+		baseWriter, err = f.CreateWriter(config)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("failed to create writer: %w", err)
+		}
+	}
+	logger.writer = baseWriter
+
+	// Create error handler
+	errHandler, err := f.CreateErrorHandler(config)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create error handler: %w", err)
+	}
+	logger.errHandler = errHandler
+
+	// Create base slog.Handler
+	var baseHandler slog.Handler
+	if config.JsonFormat {
+		baseHandler = slog.NewJSONHandler(logger.writer, &slog.HandlerOptions{
+			Level:     config.MinLevel,
+			AddSource: config.AddSource,
+		})
+	} else {
+		baseHandler = slog.NewTextHandler(logger.writer, &slog.HandlerOptions{
+			Level:     config.MinLevel,
+			AddSource: config.AddSource,
+		})
+	}
+
+	logger.handler = f.CreateHandlerWrapper(baseHandler, logger.writer)
+
+	return logger, nil
 }
 
 func (f *StandardFactory) CreateWriter(config Config) (Writer, error) {
@@ -343,7 +428,9 @@ func (f *StandardFactory) CreateFormatter(config Config) (Formatter, error) {
 }
 
 func (f *StandardFactory) CreateMetricsCollector(config Config) (MetricsCollector, error) {
-	return NewStandardMetricsCollector(), nil
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.metricsCollector, nil
 }
 
 func (f *StandardFactory) CreateRotationManager(config Config) (RotationManager, error) {
