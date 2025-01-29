@@ -5,18 +5,15 @@ import (
 	"path/filepath"
 )
 
-func SetupLogging() *l.Logger {
-	err := l.Setup(l.Options{
+func SetupLogging(factory l.Factory) (l.Logger, error) {
+	config := l.Config{
 		FilePath:    filepath.Join("logs", "app.log"),
-		MaxFileSize: 5 * 1024 * 1024, // 5MB
+		MaxFileSize: 1 * 1024 * 1024, // 5MB
 		MaxBackups:  3,
 		JsonFormat:  true,
 		AsyncWrite:  true,
 		BufferSize:  1024,
-	})
-	if err != nil {
-		panic(err)
 	}
 
-	return l
+	return factory.CreateLogger(config)
 }

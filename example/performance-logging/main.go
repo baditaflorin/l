@@ -1,4 +1,3 @@
-// example/performance-logging/main.go
 package main
 
 import (
@@ -9,28 +8,35 @@ import (
 )
 
 func main() {
-	err := l.Setup(l.Options{
+	factory := l.NewStandardFactory()
+	config := l.Config{
 		Output:     os.Stdout,
 		JsonFormat: true,
 		AsyncWrite: true,
-		BufferSize: 1024,
-	})
+		BufferSize: 1000,
+	}
+
+	logger, err := factory.CreateLogger(config)
 	if err != nil {
 		panic(err)
 	}
-	defer l.Close()
+	defer logger.Close()
 
 	// Start performance monitoring
-	go monitorPerformance()
+	go monitorPerformance(logger)
 
 	// Simulate application work
 	for i := 0; i < 10; i++ {
-		simulateWork()
+		simulateWork(logger)
 		time.Sleep(time.Second)
+	}
+
+	if err := logger.Flush(); err != nil {
+		panic(err)
 	}
 }
 
-func monitorPerformance() {
+func monitorPerformance(logger l.Logger) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -38,7 +44,7 @@ func monitorPerformance() {
 	for range ticker.C {
 		runtime.ReadMemStats(&m)
 
-		l.Info("Performance metrics",
+		logger.Info("Performance metrics",
 			"goroutines", runtime.NumGoroutine(),
 			"heap_alloc_mb", m.Alloc/1024/1024,
 			"heap_sys_mb", m.HeapSys/1024/1024,
@@ -47,16 +53,19 @@ func monitorPerformance() {
 	}
 }
 
-func simulateWork() {
+func simulateWork(logger l.Logger) {
 	start := time.Now()
+
 	// Simulate CPU-intensive work
 	data := make([]int, 1000000)
 	for i := range data {
 		data[i] = i * 2
+		logger.Debug("Processing data", "index", i)
 	}
 
-	l.Info("Work completed",
-		"duration_ms", time.Since(start).Milliseconds(),
+	duration := time.Since(start)
+	logger.Info("Work completed",
+		"duration_ms", duration.Milliseconds(),
 		"data_size", len(data),
 	)
 }

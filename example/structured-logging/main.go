@@ -1,4 +1,4 @@
-// example/structured-logging/main.go
+// File: example/structured-logging/main.go
 package main
 
 import (
@@ -17,18 +17,21 @@ type TransactionLog struct {
 }
 
 func main() {
-	err := l.Setup(l.Options{
+	factory := l.NewStandardFactory()
+	config := l.Config{
 		Output:     os.Stdout,
 		JsonFormat: true,
 		AddSource:  true,
-	})
+	}
+
+	logger, err := factory.CreateLogger(config)
 	if err != nil {
 		panic(err)
 	}
-	defer l.Close()
+	defer logger.Close()
 
 	// Create logger with common fields
-	txLogger := l.With(
+	txLogger := logger.With(
 		"service", "payment-processor",
 		"environment", "production",
 	)
@@ -59,4 +62,8 @@ func main() {
 		"status", "success",
 		"processing_time_ms", 1000,
 	)
+
+	if err := logger.Flush(); err != nil {
+		panic(err)
+	}
 }

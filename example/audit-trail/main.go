@@ -1,4 +1,3 @@
-// example/audit-trail/main.go
 package main
 
 import (
@@ -14,17 +13,28 @@ type AuditEvent struct {
 }
 
 func main() {
-	// Setup logger with JSON format and file output for audit trail
-	err := l.Setup(l.Options{
+	// Create factory and config
+	factory := l.NewStandardFactory()
+	config := l.Config{
 		FilePath:    "audit/audit.log",
 		JsonFormat:  true,
 		MaxFileSize: 10 * 1024 * 1024, // 10MB
 		MaxBackups:  30,               // Keep 30 days of audit logs
-	})
+		AddSource:   true,             // Include source file and line for audit trail
+	}
+
+	// Create logger
+	logger, err := factory.CreateLogger(config)
 	if err != nil {
 		panic(err)
 	}
-	defer l.Close()
+	defer logger.Close()
+
+	// Create a logger with common audit context
+	auditLogger := logger.With(
+		"component", "audit-system",
+		"environment", "production",
+	)
 
 	// Simulate some audit events
 	events := []AuditEvent{
@@ -48,12 +58,18 @@ func main() {
 		},
 	}
 
+	// Log each audit event
 	for _, event := range events {
-		l.Info("Audit event",
+		auditLogger.Info("Audit event",
 			"user_id", event.UserID,
 			"action", event.Action,
 			"resource", event.Resource,
 			"timestamp", event.Timestamp,
 		)
+	}
+
+	// Ensure all audit logs are written
+	if err := logger.Flush(); err != nil {
+		panic(err)
 	}
 }

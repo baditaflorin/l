@@ -9,22 +9,30 @@ import (
 )
 
 func main() {
-	errorHandler := handlers.NewErrorHandler()
+	// Create factory and config
+	factory := l.NewStandardFactory()
+	config := l.Config{
+		Output:     os.Stdout,
+		JsonFormat: true,
+		AddSource:  true,
+		Metrics:    true,
+	}
 
-	err := l.Setup(l.Options{
-		Output:        os.Stdout,
-		JsonFormat:    true,
-		ErrorCallback: errorHandler.Handle,
-		Metrics:       true,
-	})
+	errorHandler, err := handlers.NewErrorHandler(factory, config)
 	if err != nil {
 		panic(err)
 	}
-	defer l.Close()
+
+	// Create logger
+	logger, err := factory.CreateLogger(config)
+	if err != nil {
+		panic(err)
+	}
+	defer logger.Close()
 
 	// Use WaitGroup to coordinate shutdown
 	var wg sync.WaitGroup
-	wg.Add(2) // One for Monitor, one for simulateErrors
+	wg.Add(2)
 
 	// Start error monitoring
 	go func() {
@@ -35,15 +43,14 @@ func main() {
 	// Run error simulation
 	go func() {
 		defer wg.Done()
-		simulateErrors()
-		errorHandler.Stop() // Stop monitoring after scenarios complete
+		simulateErrors(logger)
+		errorHandler.Stop()
 	}()
 
-	// Wait for all goroutines to complete
 	wg.Wait()
 }
 
-func simulateErrors() {
+func simulateErrors(logger l.Logger) {
 	scenarios := []struct {
 		name string
 		fn   func()
@@ -54,12 +61,12 @@ func simulateErrors() {
 	}
 
 	for _, scenario := range scenarios {
-		l.Info("Running error scenario", "name", scenario.name)
+		logger.Info("Running error scenario", "name", scenario.name)
 
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					l.Error("Scenario failed",
+					logger.Error("Scenario failed",
 						"name", scenario.name,
 						"error", r,
 					)

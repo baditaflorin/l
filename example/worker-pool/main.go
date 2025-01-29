@@ -8,19 +8,21 @@ import (
 )
 
 func main() {
-	// Setup async logging with buffer
-	err := l.Setup(l.Options{
+	factory := l.NewStandardFactory()
+	config := l.Config{
 		Output:     os.Stdout,
 		JsonFormat: true,
 		AsyncWrite: true,
 		BufferSize: 1024,
-	})
+	}
+
+	logger, err := factory.CreateLogger(config)
 	if err != nil {
 		panic(err)
 	}
-	defer l.Close()
+	defer logger.Close()
 
-	pool := worker.NewPool(50)
+	pool := worker.NewPool(50, logger)
 
 	// Submit jobs
 	for i := 0; i < 20; i++ {
@@ -30,4 +32,9 @@ func main() {
 	// Wait for completion
 	time.Sleep(5 * time.Second)
 	pool.Stop()
+
+	// Ensure all logs are written
+	if err := logger.Flush(); err != nil {
+		panic(err)
+	}
 }

@@ -8,13 +8,27 @@ import (
 )
 
 type Reporter struct {
-	stopChan chan struct{}
+	logger           l.Logger
+	metricsCollector l.MetricsCollector
+	stopChan         chan struct{}
 }
 
-func NewReporter() *Reporter {
-	return &Reporter{
-		stopChan: make(chan struct{}),
+func NewReporter(factory l.Factory, config l.Config) (*Reporter, error) {
+	logger, err := factory.CreateLogger(config)
+	if err != nil {
+		return nil, err
 	}
+
+	metricsCollector, err := factory.CreateMetricsCollector(config)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Reporter{
+		logger:           logger,
+		metricsCollector: metricsCollector,
+		stopChan:         make(chan struct{}),
+	}, nil
 }
 
 func (r *Reporter) Start() {
@@ -36,16 +50,16 @@ func (r *Reporter) Stop() {
 }
 
 func (r *Reporter) reportMetrics() {
-	metrics := l.GetMetrics()
+	metrics := r.metricsCollector.GetMetrics()
 
-	l.Info("Logging metrics",
-		"total_messages", metrics.TotalMessages.Load(),
-		"error_messages", metrics.ErrorMessages.Load(),
-		"dropped_messages", metrics.DroppedMessages.Load(),
+	r.logger.Info("Logging metrics",
+		"total_messages", metrics.TotalMessages,
+		"error_messages", metrics.ErrorMessages,
+		"dropped_messages", metrics.DroppedMessages,
 	)
 }
 
 func (r *Reporter) HandleMetrics(w http.ResponseWriter, req *http.Request) {
-	metrics := l.GetMetrics()
+	metrics := r.metricsCollector.GetMetrics()
 	json.NewEncoder(w).Encode(metrics)
 }

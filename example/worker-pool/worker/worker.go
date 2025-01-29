@@ -8,6 +8,7 @@ import (
 )
 
 type Pool struct {
+	logger  l.Logger
 	jobs    chan int
 	workers int
 	wg      sync.WaitGroup
@@ -15,9 +16,10 @@ type Pool struct {
 	cancel  context.CancelFunc
 }
 
-func NewPool(workers int) *Pool {
+func NewPool(workers int, logger l.Logger) *Pool {
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &Pool{
+		logger:  logger,
 		jobs:    make(chan int, 100),
 		workers: workers,
 		ctx:     ctx,
@@ -35,8 +37,10 @@ func NewPool(workers int) *Pool {
 func (p *Pool) worker(id int) {
 	defer p.wg.Done()
 
-	l.Info("Worker started", "worker_id", id)
-	defer l.Info("Worker stopped", "worker_id", id)
+	// Create worker-specific logger
+	workerLogger := p.logger.With("worker_id", id)
+	workerLogger.Info("Worker started")
+	defer workerLogger.Info("Worker stopped")
 
 	for {
 		select {
@@ -47,10 +51,7 @@ func (p *Pool) worker(id int) {
 				return
 			}
 
-			l.Info("Processing job",
-				"worker_id", id,
-				"job_id", job,
-			)
+			workerLogger.Info("Processing job", "job_id", job)
 
 			// Simulate work
 			select {
@@ -60,18 +61,14 @@ func (p *Pool) worker(id int) {
 			}
 
 			if job%5 == 0 {
-				l.Error("Job failed",
-					"worker_id", id,
+				workerLogger.Error("Job failed",
 					"job_id", job,
 					"reason", "divisible by 5",
 				)
 				continue
 			}
 
-			l.Info("Job completed",
-				"worker_id", id,
-				"job_id", job,
-			)
+			workerLogger.Info("Job completed", "job_id", job)
 		}
 	}
 }
@@ -101,8 +98,8 @@ func (p *Pool) Stop() {
 
 	select {
 	case <-done:
-		l.Info("All workers stopped gracefully")
+		p.logger.Info("All workers stopped gracefully")
 	case <-time.After(3 * time.Second):
-		l.Warn("Timeout waiting for workers to stop")
+		p.logger.Warn("Timeout waiting for workers to stop")
 	}
 }

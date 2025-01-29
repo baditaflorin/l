@@ -3,24 +3,38 @@ package main
 import (
 	"context"
 	"github.com/baditaflorin/l"
+	"log/slog"
 	"sync"
 	"time"
 )
 
 func main() {
-	// Configure for high throughput with larger buffer
-	err := l.Setup(l.Options{
-		//Output:     os.Stdout,
+	// Create factory and config
+	factory := l.NewStandardFactory()
+	config := l.Config{
 		FilePath:    "high-throughput/high-throughput.log",
-		MaxFileSize: 10 * 1024 * 1024, // 10MB
+		MaxFileSize: 100 * 1024 * 1024, // 100MB
 		JsonFormat:  true,
 		AsyncWrite:  true,
-		BufferSize:  1024 * 1024, // Increase buffer size to 1MB
-	})
+		BufferSize:  1024 * 1024, // 1MB buffer
+		MinLevel:    slog.LevelInfo,
+		AddSource:   true,
+		MaxBackups:  5,
+		Metrics:     true,
+	}
+
+	// Create logger
+	logger, err := factory.CreateLogger(config)
 	if err != nil {
 		panic(err)
 	}
-	defer l.Close()
+	defer logger.Close()
+
+	// Create metrics collector
+	metricsCollector, err := factory.CreateMetricsCollector(config)
+	if err != nil {
+		panic(err)
+	}
 
 	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -37,50 +51,22 @@ func main() {
 	// Channel for backpressure
 	semaphore := make(chan struct{}, numGoroutines*2)
 
-	// WaitGroup for all goroutines (workers + metrics)
-	var allDone sync.WaitGroup
-
-	// Start metrics monitoring with proper cleanup
-	allDone.Add(1)
-	metricsStop := make(chan struct{})
-	go func() {
-		defer allDone.Done()
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				metrics := l.GetMetrics()
-				l.Info("Logging metrics",
-					"total_messages", metrics.TotalMessages.Load(),
-					"dropped_messages", metrics.DroppedMessages.Load(),
-					"error_messages", metrics.ErrorMessages.Load(),
-				)
-			case <-metricsStop:
-				return
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
 	// Start worker goroutines
 	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
-		allDone.Add(1)
 		go func(routineID int) {
 			defer wg.Done()
-			defer allDone.Done()
+
+			routineLogger := logger.With("routine_id", routineID)
 
 			for j := 0; j < logsPerRoutine; j++ {
 				select {
 				case semaphore <- struct{}{}:
-					l.Info("High throughput test",
-						"routine_id", routineID,
+					routineLogger.Info("High throughput test",
 						"count", j,
 						"data", generateLargePayload(10),
 					)
+					metricsCollector.IncrementTotal()
 					<-semaphore
 				case <-ctx.Done():
 					return
@@ -89,21 +75,40 @@ func main() {
 		}(i)
 	}
 
+	// Monitor metrics
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				metrics := metricsCollector.GetMetrics()
+				logger.Info("Logging metrics",
+					"total_messages", metrics.TotalMessages,
+					"dropped_messages", metrics.DroppedMessages,
+					"error_messages", metrics.ErrorMessages,
+				)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	// Wait for all worker goroutines
 	wg.Wait()
 
 	// Log completion metrics
 	duration := time.Since(start)
-	l.Info("Test completed",
+	logger.Info("Test completed",
 		"duration_seconds", duration.Seconds(),
 		"messages_per_second", float64(numGoroutines*logsPerRoutine)/duration.Seconds(),
 	)
 
-	// Stop metrics monitoring
-	close(metricsStop)
-
-	// Wait for all goroutines to finish
-	allDone.Wait()
+	// Ensure all logs are written
+	if err := logger.Flush(); err != nil {
+		logger.Error("Failed to flush logs", "error", err)
+	}
 }
 
 func generateLargePayload(size int) string {

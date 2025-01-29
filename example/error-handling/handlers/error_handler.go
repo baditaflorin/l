@@ -8,6 +8,7 @@ import (
 )
 
 type ErrorHandler struct {
+	logger   l.Logger
 	errors   []error
 	mu       sync.RWMutex
 	stopChan chan struct{}
@@ -16,11 +17,17 @@ type ErrorHandler struct {
 	stopOnce sync.Once
 }
 
-func NewErrorHandler() *ErrorHandler {
+func NewErrorHandler(factory l.Factory, config l.Config) (*ErrorHandler, error) {
+	logger, err := factory.CreateLogger(config)
+	if err != nil {
+		return nil, err
+	}
+
 	return &ErrorHandler{
+		logger:   logger,
 		stopChan: make(chan struct{}),
 		done:     make(chan struct{}),
-	}
+	}, nil
 }
 
 func (h *ErrorHandler) Handle(err error) {
@@ -29,7 +36,7 @@ func (h *ErrorHandler) Handle(err error) {
 
 	h.errors = append(h.errors, err)
 
-	l.Error("Error handled",
+	h.logger.Error("Error handled",
 		"error", err,
 		"total_errors", len(h.errors),
 	)
@@ -45,7 +52,7 @@ func (h *ErrorHandler) Monitor() {
 		select {
 		case <-ticker.C:
 			h.mu.RLock()
-			l.Info("Error handler status",
+			h.logger.Info("Error handler status",
 				"total_errors", len(h.errors),
 				"last_error", h.getLastError(),
 			)

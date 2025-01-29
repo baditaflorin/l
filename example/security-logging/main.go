@@ -1,4 +1,4 @@
-// example/security-logging/main.go
+// File: example/security-logging/main.go
 package main
 
 import (
@@ -18,19 +18,27 @@ type SecurityEvent struct {
 }
 
 func main() {
-	// Setup secure logging with both console and file output
-	err := l.Setup(l.Options{
+	factory := l.NewStandardFactory()
+	config := l.Config{
 		Output:      os.Stdout,
 		FilePath:    "security/events.log",
 		JsonFormat:  true,
 		AddSource:   true,
 		MaxFileSize: 50 * 1024 * 1024, // 50MB
 		MaxBackups:  90,               // Keep 90 days of security logs
-	})
+	}
+
+	logger, err := factory.CreateLogger(config)
 	if err != nil {
 		panic(err)
 	}
-	defer l.Close()
+	defer logger.Close()
+
+	// Create security-focused logger with context
+	securityLogger := logger.With(
+		"component", "security-monitor",
+		"environment", "production",
+	)
 
 	// Simulate security events
 	events := []SecurityEvent{
@@ -55,7 +63,7 @@ func main() {
 	}
 
 	for _, event := range events {
-		l.Error("Security event detected",
+		securityLogger.Error("Security event detected",
 			"event_type", event.EventType,
 			"severity", event.Severity,
 			"source", event.Source,
@@ -64,5 +72,10 @@ func main() {
 			"ip_address", event.IPAddress,
 			"timestamp", event.Timestamp,
 		)
+	}
+
+	// Ensure all security logs are written
+	if err := logger.Flush(); err != nil {
+		panic(err)
 	}
 }

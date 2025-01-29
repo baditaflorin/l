@@ -7,24 +7,31 @@ import (
 )
 
 func main() {
-	err := l.Setup(l.Options{
+	factory := l.NewStandardFactory()
+	config := l.Config{
 		JsonFormat: true,
 		Metrics:    true,
-	})
+	}
+
+	reporter, err := metrics.NewReporter(factory, config)
 	if err != nil {
 		panic(err)
 	}
-	defer l.Close()
 
 	// Start metrics reporter
-	reporter := metrics.NewReporter()
 	go reporter.Start()
 
 	// Setup metrics endpoint
 	http.HandleFunc("/metrics", reporter.HandleMetrics)
 
-	l.Info("Starting metrics server", "port", 8080)
+	logger, err := factory.CreateLogger(config)
+	if err != nil {
+		panic(err)
+	}
+	defer logger.Close()
+
+	logger.Info("Starting metrics server", "port", 8080)
 	if err := http.ListenAndServe(":8080", nil); err != nil {
-		l.Error("Server failed", "error", err)
+		logger.Error("Server failed", "error", err)
 	}
 }

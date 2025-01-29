@@ -9,24 +9,26 @@ import (
 )
 
 func main() {
-	// Setup logger with JSON format and source info
-	err := l.Setup(l.Options{
+	factory := l.NewStandardFactory()
+	config := l.Config{
 		Output:     os.Stdout,
 		JsonFormat: true,
 		AddSource:  true,
 		Metrics:    true,
-	})
+	}
+
+	logger, err := factory.CreateLogger(config)
 	if err != nil {
 		panic(err)
 	}
-	defer l.Close()
+	defer logger.Close()
 
 	// Create router and add logging middleware
 	mux := http.NewServeMux()
-	mux.Handle("/users", middleware.LogRequest(handlers.UsersHandler()))
+	mux.Handle("/users", middleware.LogRequest(logger)(handlers.UsersHandler(logger)))
 
-	l.Info("Starting web service", "port", 8080)
+	logger.Info("Starting web service", "port", 8080)
 	if err := http.ListenAndServe(":8080", mux); err != nil {
-		l.Error("Server failed", "error", err)
+		logger.Error("Server failed", "error", err)
 	}
 }

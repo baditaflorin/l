@@ -1,18 +1,22 @@
 package main
 
 import (
-	"./config"
 	"github.com/baditaflorin/l"
+	"github.com/baditaflorin/l/example/log-rotation/config"
 	"time"
 )
 
 func main() {
-	logger := config.SetupLogging()
+	factory := l.NewStandardFactory()
+	logger, err := config.SetupLogging(factory)
+	if err != nil {
+		panic(err)
+	}
 	defer logger.Close()
 
 	// Generate lots of logs
 	for i := 0; i < 1000000; i++ {
-		l.Info("Application metric",
+		logger.Info("Application metric",
 			"iteration", i,
 			"timestamp", time.Now().Unix(),
 			"data", generateLargeString(100),
@@ -22,10 +26,13 @@ func main() {
 			time.Sleep(time.Millisecond * 100)
 		}
 	}
+
+	if err := logger.Flush(); err != nil {
+		panic(err)
+	}
 }
 
 func generateLargeString(size int) string {
-	// Generate dummy data
 	data := make([]byte, size)
 	for i := range data {
 		data[i] = 'A' + byte(i%26)
