@@ -409,7 +409,8 @@ type BufferedWriter struct {
 	wg        sync.WaitGroup
 	batchSize int
 	closed    atomic.Bool
-	flushChan chan chan struct{} // Change to channel of channels for response
+	flushChan chan chan struct{}
+	mu        sync.Mutex // Add mutex for synchronization
 }
 
 func NewBufferedWriter(out io.Writer, bufferSize int) *BufferedWriter {
@@ -422,7 +423,7 @@ func NewBufferedWriter(out io.Writer, bufferSize int) *BufferedWriter {
 		buf:       make(chan []byte, bufferSize),
 		done:      make(chan struct{}),
 		batchSize: 1000,
-		flushChan: make(chan chan struct{}, 1), // Buffer of 1 to prevent deadlocks
+		flushChan: make(chan chan struct{}, 1),
 	}
 
 	w.wg.Add(1)
@@ -435,36 +436,38 @@ func (w *BufferedWriter) writeLoop() {
 	defer w.wg.Done()
 
 	batch := make([][]byte, 0, w.batchSize)
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
+
+	flush := func() {
+		if len(batch) > 0 {
+			w.flushBatch(batch)
+			batch = batch[:0]
+		}
+	}
 
 	for {
 		select {
 		case <-w.done:
-			w.flushBatch(batch)
+			flush()
 			return
 
 		case data, ok := <-w.buf:
 			if !ok {
-				w.flushBatch(batch)
+				flush()
 				return
 			}
 			batch = append(batch, data)
 			if len(batch) >= w.batchSize {
-				w.flushBatch(batch)
-				batch = batch[:0]
+				flush()
 			}
 
 		case respChan := <-w.flushChan:
-			w.flushBatch(batch)
-			batch = batch[:0]
-			respChan <- struct{}{} // Signal flush completion
+			flush()
+			respChan <- struct{}{}
 
 		case <-ticker.C:
-			if len(batch) > 0 {
-				w.flushBatch(batch)
-				batch = batch[:0]
-			}
+			flush()
 		}
 	}
 }
@@ -474,17 +477,23 @@ func (w *BufferedWriter) flushBatch(batch [][]byte) {
 		return
 	}
 
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	// Calculate total length needed
 	totalLen := 0
 	for _, msg := range batch {
 		totalLen += len(msg)
 	}
 
+	// Create a single buffer for all messages
 	combined := make([]byte, 0, totalLen)
 	for _, msg := range batch {
 		combined = append(combined, msg...)
 	}
 
-	_, _ = w.out.Write(combined)
+	// Write everything at once
+	w.out.Write(combined)
 }
 
 func (w *BufferedWriter) Write(p []byte) (n int, err error) {
@@ -492,14 +501,18 @@ func (w *BufferedWriter) Write(p []byte) (n int, err error) {
 		return 0, fmt.Errorf("writer is closed")
 	}
 
+	// Create a copy of the data to prevent modification
 	data := make([]byte, len(p))
 	copy(data, p)
 
 	select {
 	case w.buf <- data:
 		return len(p), nil
-	case <-time.After(100 * time.Millisecond):
-		return w.out.Write(p) // Fall back to direct write
+	default:
+		// If buffer is full, write directly
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return w.out.Write(p)
 	}
 }
 
@@ -508,9 +521,13 @@ func (w *BufferedWriter) Close() error {
 		return nil
 	}
 
+	// Signal shutdown
 	close(w.done)
+
+	// Wait for writeLoop to finish
 	w.wg.Wait()
 
+	// Close underlying writer if it supports it
 	if closer, ok := w.out.(io.Closer); ok {
 		return closer.Close()
 	}
@@ -524,12 +541,14 @@ func (w *BufferedWriter) Flush() error {
 
 	respChan := make(chan struct{})
 
-	// Try to send flush request
+	// Send flush request
 	select {
 	case w.flushChan <- respChan:
-		// Wait for flush completion
+		// Wait for flush to complete
 		select {
 		case <-respChan:
+			// Additional small delay to ensure writes are visible
+			time.Sleep(time.Millisecond)
 			return nil
 		case <-time.After(time.Second):
 			return fmt.Errorf("flush timeout")
