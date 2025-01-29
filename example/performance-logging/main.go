@@ -57,7 +57,7 @@ func simulateWork(logger l.Logger) {
 	start := time.Now()
 
 	// Simulate CPU-intensive work
-	data := make([]int, 1000000)
+	data := make([]int, 100000)
 	for i := range data {
 		data[i] = i * 2
 		logger.Debug("Processing data", "index", i)
