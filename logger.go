@@ -14,6 +14,13 @@ import (
 	"time"
 )
 
+var (
+	ErrBufferFull      = fmt.Errorf("log buffer full")
+	ErrShutdownTimeout = fmt.Errorf("shutdown timeout")
+	output             io.Writer // Add this at package level with other vars
+
+)
+
 const (
 	maxStackDepth       = 50
 	maxErrorRetries     = 3
@@ -50,68 +57,131 @@ var (
 	metrics    LogMetrics
 	bufferPool sync.Pool
 	mu         sync.RWMutex
-	once       sync.Once
+	flushMu    sync.Mutex // Separate mutex for flush operations
 	shutdown   chan struct{}
 	wg         sync.WaitGroup
 )
 
 type bufferedWriter struct {
-	out    io.Writer
-	buf    chan []byte
-	errCb  func(error)
-	ctx    context.Context
-	cancel context.CancelFunc
+	out       io.Writer
+	buf       chan []byte
+	errCb     func(error)
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	metrics   *LogMetrics
+	batchSize int
+	closed    atomic.Bool
 }
 
-func newBufferedWriter(w io.Writer, bufSize int, errCb func(error)) *bufferedWriter {
+func newBufferedWriter(w io.Writer, bufSize int, errCb func(error), metrics *LogMetrics) *bufferedWriter {
 	ctx, cancel := context.WithCancel(context.Background())
 	bw := &bufferedWriter{
-		out:    w,
-		buf:    make(chan []byte, bufSize),
-		errCb:  errCb,
-		ctx:    ctx,
-		cancel: cancel,
+		out:       w,
+		buf:       make(chan []byte, bufSize),
+		errCb:     errCb,
+		ctx:       ctx,
+		cancel:    cancel,
+		metrics:   metrics,
+		batchSize: 1000,
 	}
 
-	wg.Add(1)
-	go bw.writeLoop()
+	// Start worker goroutines
+	const numWorkers = 4
+	bw.wg.Add(numWorkers)
+	for i := 0; i < numWorkers; i++ {
+		go bw.writeLoop()
+	}
+
 	return bw
 }
 
 func (w *bufferedWriter) writeLoop() {
-	defer wg.Done()
+	defer w.wg.Done()
+
+	batch := make([][]byte, 0, w.batchSize)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-w.ctx.Done():
-			// Drain remaining messages before exit
-			for len(w.buf) > 0 {
-				data := <-w.buf
-				_, err := w.out.Write(data)
-				if err != nil && w.errCb != nil {
-					w.errCb(fmt.Errorf("error writing log: %w", err))
-				}
-			}
+			// Flush remaining messages before exiting
+			w.flushBatch(batch)
 			return
+
 		case data, ok := <-w.buf:
 			if !ok {
+				w.flushBatch(batch)
 				return
 			}
-			_, err := w.out.Write(data)
-			if err != nil && w.errCb != nil {
-				w.errCb(fmt.Errorf("error writing log: %w", err))
+			batch = append(batch, data)
+			if len(batch) >= w.batchSize {
+				w.flushBatch(batch)
+				batch = batch[:0]
+			}
+
+		case <-ticker.C:
+			if len(batch) > 0 {
+				w.flushBatch(batch)
+				batch = batch[:0]
 			}
 		}
 	}
 }
 
+func (w *bufferedWriter) flushBatch(batch [][]byte) {
+	if len(batch) == 0 {
+		return
+	}
+
+	// Combine batched messages
+	totalLen := 0
+	for _, msg := range batch {
+		totalLen += len(msg)
+	}
+
+	combined := make([]byte, 0, totalLen)
+	for _, msg := range batch {
+		combined = append(combined, msg...)
+	}
+
+	// Retry logic for writes
+	const maxRetries = 3
+	var err error
+	for i := 0; i < maxRetries; i++ {
+		_, err = w.out.Write(combined)
+		if err == nil {
+			break
+		}
+		// Exponential backoff
+		time.Sleep(time.Millisecond * 10 * time.Duration(1<<uint(i)))
+	}
+
+	if err != nil && w.errCb != nil {
+		w.errCb(fmt.Errorf("failed to write log batch after %d retries: %w", maxRetries, err))
+	}
+}
+
 func (w *bufferedWriter) Write(p []byte) (n int, err error) {
+	if w.closed.Load() {
+		return 0, fmt.Errorf("writer is closed")
+	}
+
+	// Make a copy of the data since p might be reused
+	data := make([]byte, len(p))
+	copy(data, p)
+
+	// Try to write to buffer with timeout
 	select {
-	case w.buf <- append([]byte(nil), p...):
+	case w.buf <- data:
 		return len(p), nil
-	default:
-		metrics.DroppedMessages.Add(1)
-		return 0, fmt.Errorf("log buffer full")
+	case <-time.After(100 * time.Millisecond): // Reduced timeout
+		if w.metrics != nil {
+			w.metrics.DroppedMessages.Add(1)
+		}
+		// Fall back to synchronous write if buffer is full
+		return w.out.Write(p)
 	}
 }
 
@@ -156,21 +226,34 @@ func Setup(opts Options) error {
 		return fmt.Errorf("invalid options: %w", err)
 	}
 
-	var output io.Writer = opts.Output
+	// Close existing logger if present
+	if l := logger.Load(); l != nil {
+		if err := Close(); err != nil {
+			return fmt.Errorf("failed to close existing logger: %w", err)
+		}
+	}
+
+	var finalOutput io.Writer
+
+	// Setup file output if FilePath is specified, otherwise use default output
 	if opts.FilePath != "" {
 		file, err := setupLogFile(opts)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to setup log file: %w", err)
 		}
-		output = file
+		finalOutput = file
+	} else {
+		finalOutput = opts.Output
 	}
 
-	// Setup buffered/async writing if requested
+	var asyncWriter *bufferedWriter
+
 	if opts.AsyncWrite {
-		bw := newBufferedWriter(output, opts.BufferSize, opts.ErrorCallback)
-		output = bw
+		asyncWriter = newBufferedWriter(finalOutput, opts.BufferSize, opts.ErrorCallback, &metrics)
+		finalOutput = asyncWriter
 	}
 
+	// Create and store new logger
 	handlerOpts := &slog.HandlerOptions{
 		Level:     opts.MinLevel,
 		AddSource: opts.AddSource,
@@ -178,36 +261,28 @@ func Setup(opts Options) error {
 
 	var handler slog.Handler
 	if opts.JsonFormat {
-		handler = slog.NewJSONHandler(output, handlerOpts)
+		handler = slog.NewJSONHandler(finalOutput, handlerOpts)
 	} else {
-		handler = slog.NewTextHandler(output, handlerOpts)
+		handler = slog.NewTextHandler(finalOutput, handlerOpts)
 	}
 
 	// Wrap with recovery handler
 	handler = &recoveryHandler{handler, opts.ErrorCallback}
 
-	newLogger := slog.New(handler)
-	logger.Store(newLogger)
+	if asyncWriter != nil {
+		handler = &closingHandler{
+			Handler: handler,
+			closer:  asyncWriter,
+		}
+	}
 
+	logger.Store(slog.New(handler))
+
+	// Start health check if metrics are enabled
 	if opts.Metrics {
 		startHealthCheck()
 	}
-	return nil
-}
 
-func validateOptions(opts *Options) error {
-	if opts.Output == nil {
-		opts.Output = os.Stdout
-	}
-	if opts.BufferSize == 0 {
-		opts.BufferSize = maxBufferSize
-	}
-	if opts.MaxFileSize == 0 {
-		opts.MaxFileSize = 100 * 1024 * 1024 // 100MB
-	}
-	if opts.MaxBackups == 0 {
-		opts.MaxBackups = 5
-	}
 	return nil
 }
 
@@ -226,6 +301,35 @@ func setupLogFile(opts Options) (*os.File, error) {
 	go monitorFileSize(opts, file)
 
 	return file, nil
+}
+
+// closingHandler wraps a handler and ensures proper cleanup
+type closingHandler struct {
+	slog.Handler
+	closer io.Closer
+}
+
+func (h *closingHandler) Close() error {
+	if h.closer != nil {
+		return h.closer.Close()
+	}
+	return nil
+}
+
+func validateOptions(opts *Options) error {
+	if opts.Output == nil {
+		opts.Output = os.Stdout
+	}
+	if opts.BufferSize == 0 {
+		opts.BufferSize = maxBufferSize
+	}
+	if opts.MaxFileSize == 0 {
+		opts.MaxFileSize = 100 * 1024 * 1024 // 100MB
+	}
+	if opts.MaxBackups == 0 {
+		opts.MaxBackups = 5
+	}
+	return nil
 }
 
 func monitorFileSize(opts Options, file *os.File) {
@@ -383,76 +487,65 @@ func With(args ...any) *slog.Logger {
 	return nil
 }
 
+// Flush ensures all pending logs are written
 func Flush() error {
-	mu.Lock()
+	flushMu.Lock()
+	defer flushMu.Unlock()
 
-	Info("Flushing logs before exit")
-
-	// Copy the current logger pointer
 	l := logger.Load()
-
-	// Unlock before performing potentially long operations
-	mu.Unlock()
-
 	if l == nil {
 		return nil
 	}
 
-	// Ensure all buffered logs are written
-	time.Sleep(200 * time.Millisecond)
+	if h, ok := l.Handler().(*closingHandler); ok {
+		if closer, ok := h.closer.(*bufferedWriter); ok {
+			// Check if there are pending messages
+			if len(closer.buf) == 0 {
+				return nil
+			}
 
-	// Check if handler supports flushing
-	if handler, ok := l.Handler().(interface{ Flush() error }); ok {
-		if err := handler.Flush(); err != nil {
-			return fmt.Errorf("failed to flush logs: %w", err)
+			// Wait for buffered writes to complete with timeout
+			timeout := time.After(2 * time.Second)
+			ticker := time.NewTicker(50 * time.Millisecond)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-timeout:
+					return ErrShutdownTimeout
+				case <-ticker.C:
+					if len(closer.buf) == 0 {
+						return nil
+					}
+				}
+			}
 		}
 	}
-
 	return nil
 }
 
-func Close() error {
-	mu.Lock()
-
-	// Close shutdown channel to signal all goroutines to exit
-	if shutdown != nil {
-		close(shutdown)
+func (w *bufferedWriter) Close() error {
+	if w.closed.Swap(true) {
+		return nil // Already closed
 	}
 
-	mu.Unlock()
+	// Signal shutdown
+	w.cancel()
 
-	// Give some time for goroutines to finish their work
-	time.Sleep(200 * time.Millisecond)
-
-	// Ensure all pending logs are flushed
-	if err := Flush(); err != nil {
-		return err
-	}
-
-	// Wait for goroutines to exit, but add a timeout to prevent deadlocks
+	// Create a channel to signal when all writes are complete
 	done := make(chan struct{})
 	go func() {
-		wg.Wait()
+		w.wg.Wait()
 		close(done)
 	}()
 
+	// Wait for all writers to finish with timeout
 	select {
 	case <-done:
-		// Successfully waited for all goroutines to finish
-	case <-time.After(5 * time.Second):
-		fmt.Println("Warning: Timeout while waiting for goroutines to exit")
+		return nil
+	case <-time.After(2 * time.Second): // Reduced timeout
+		return ErrShutdownTimeout
 	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	if l := logger.Load(); l != nil {
-		if closer, ok := l.Handler().(io.Closer); ok {
-			return closer.Close()
-		}
-	}
-
-	return nil
 }
 
 func init() {
@@ -471,4 +564,26 @@ func init() {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		logger.Store(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	}
+}
+
+// Close gracefully shuts down the logger and flushes any pending writes
+func Close() error {
+	flushMu.Lock()
+	defer flushMu.Unlock()
+
+	l := logger.Load()
+	if l == nil {
+		return nil
+	}
+
+	// Close the handler if it supports closing
+	if h, ok := l.Handler().(*closingHandler); ok {
+		if err := h.Close(); err != nil {
+			return fmt.Errorf("failed to close handler: %w", err)
+		}
+	}
+
+	// Clear the logger
+	logger.Store(nil)
+	return nil
 }
