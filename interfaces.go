@@ -48,7 +48,7 @@ type BufferManager interface {
 	IsFull() bool
 }
 
-// MetricsCollector handles logging metrics collection and reporting
+// MetricsCollector handles logging Metrics collection and reporting
 type MetricsCollector interface {
 	IncrementTotal()
 	IncrementErrors()
@@ -116,7 +116,7 @@ type LogRecord struct {
 	AddSource bool
 }
 
-// Metrics holds logger operational metrics
+// Metrics holds logger operational Metrics
 type Metrics struct {
 	TotalMessages   uint64
 	ErrorMessages   uint64

@@ -1,13 +1,13 @@
 # Advanced Structured Logging Framework for Go
 
-A high-performance, feature-rich structured logging framework for Go applications with support for asynchronous writes, log rotation, metrics collection, and more.
+A high-performance, feature-rich structured logging framework for Go applications with support for asynchronous writes, log rotation, Metrics collection, and more.
 
 ## Features
 
 - **Structured Logging**: JSON and text format support with key-value pairs
 - **Asynchronous Writing**: Non-blocking log writes with configurable buffer size
 - **Log Rotation**: Automatic file rotation based on size with configurable backups
-- **Metrics Collection**: Built-in logging metrics and performance monitoring
+- **Metrics Collection**: Built-in logging Metrics and performance monitoring
 - **Health Checking**: Integrated health monitoring system
 - **Error Handling**: Comprehensive error handling with panic recovery
 - **Context Support**: Context propagation through logging chain
@@ -107,13 +107,13 @@ config := l.Config{
 ### Metrics Collection
 
 ```go
-metrics, err := factory.CreateMetricsCollector(config)
+Metrics, err := factory.CreateMetricsCollector(config)
 if err != nil {
     panic(err)
 }
 
-// Get metrics
-stats := metrics.GetMetrics()
+// Get Metrics
+stats := Metrics.GetMetrics()
 fmt.Printf("Total Messages: %d\n", stats.TotalMessages)
 fmt.Printf("Error Messages: %d\n", stats.ErrorMessages)
 ```
@@ -143,7 +143,7 @@ The library includes several example applications demonstrating different use ca
 - Audit trail logging (`example/audit-trail`)
 - High-throughput logging (`example/high-throughput`)
 - Worker pool logging (`example/worker-pool`)
-- Metrics dashboard (`example/metrics-dashboard`)
+- Metrics dashboard (`example/Metrics-dashboard`)
 - Error handling (`example/error-handling`)
 - Log rotation (`example/log-rotation`)
 - Security logging (`example/security-logging`)

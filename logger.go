@@ -19,7 +19,7 @@ var ErrBufferFull = fmt.Errorf("log buffer full")
 // StandardLogger implements the Logger interface
 type StandardLogger struct {
 	handler     HandlerWrapper
-	metrics     MetricsCollector
+	Metrics     MetricsCollector
 	errHandler  ErrorHandler
 	healthCheck HealthChecker
 	writer      Writer
@@ -75,13 +75,13 @@ func NewStandardLogger(factory Factory, config Config) (Logger, error) {
 		isAsync: config.AsyncWrite,
 	}
 
-	// Create metrics collector.
+	// Create Metrics collector.
 	metrics, err := factory.CreateMetricsCollector(config)
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("failed to create metrics collector: %w", err)
+		return nil, fmt.Errorf("failed to create Metrics collector: %w", err)
 	}
-	logger.metrics = metrics
+	logger.Metrics = metrics
 
 	// Set up the writer.
 	var baseWriter Writer
@@ -165,18 +165,18 @@ func (l *StandardLogger) Debug(msg string, args ...any) {
 	l.log(LevelDebug, msg, args...)
 }
 
-// Update the log method in StandardLogger to ensure metrics are incremented correctly
+// Update the log method in StandardLogger to ensure Metrics are incremented correctly
 func (l *StandardLogger) log(level slog.Level, msg string, args ...any) {
 	if l.closed.Load() {
 		return
 	}
 
-	// Use atomic operations for metrics
-	if l.metrics != nil {
-		l.metrics.IncrementTotal()
+	// Use atomic operations for Metrics
+	if l.Metrics != nil {
+		l.Metrics.IncrementTotal()
 		if level == LevelError {
-			l.metrics.IncrementErrors()
-			l.metrics.SetLastError(time.Now())
+			l.Metrics.IncrementErrors()
+			l.Metrics.SetLastError(time.Now())
 		}
 	}
 
@@ -222,7 +222,7 @@ func (l *StandardLogger) log(level slog.Level, msg string, args ...any) {
 func (l *StandardLogger) With(args ...any) Logger {
 	newLogger := &StandardLogger{
 		handler:     l.handler,
-		metrics:     l.metrics,
+		Metrics:     l.Metrics,
 		errHandler:  l.errHandler,
 		healthCheck: l.healthCheck,
 		writer:      l.writer,
@@ -311,7 +311,7 @@ func (l *StandardLogger) Close() error {
 func (l *StandardLogger) WithContext(ctx context.Context) Logger {
 	newLogger := &StandardLogger{
 		handler:     l.handler,
-		metrics:     l.metrics,
+		Metrics:     l.Metrics,
 		errHandler:  l.errHandler,
 		healthCheck: l.healthCheck,
 		writer:      l.writer,
@@ -366,12 +366,12 @@ func (f *StandardFactory) CreateLogger(config Config) (Logger, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
-	// Use the factory's metrics collector
+	// Use the factory's Metrics collector
 	metrics := f.metricsCollector
 
 	logger := &StandardLogger{
 		config:  config,
-		metrics: metrics,
+		Metrics: metrics,
 		fields:  make(map[string]interface{}),
 		isAsync: config.AsyncWrite,
 	}
