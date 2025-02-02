@@ -35,16 +35,37 @@ type StandardLogger struct {
 
 // NewStandardLogger creates a new logger instance using the provided factory
 func NewStandardLogger(factory Factory, config Config) (Logger, error) {
-	if err := validateConfig(&config); err != nil {
-		return nil, fmt.Errorf("invalid config: %w", err)
+	// Merge legacy fields if the new ones are not set.
+	// For the log level, if Level is zero then use MinLevel (if set), else default to LevelInfo.
+	if config.Level == 0 {
+		if config.MinLevel != 0 {
+			config.Level = config.MinLevel
+		} else {
+			config.Level = LevelInfo
+		}
+	}
+	// For the JSON flag, if JSON is false but the legacy JsonFormat is true, then use that.
+	// (Note: if the user explicitly wants false in the new field, then JSON remains false.)
+	if !config.JSON && config.JsonFormat {
+		config.JSON = config.JsonFormat
+	}
+	// For new string fields, if not provided, set sensible defaults.
+	if config.ServiceName == "" {
+		config.ServiceName = "whisper-service"
+	}
+	if config.Environment == "" {
+		config.Environment = "development"
+	}
+	if config.TimeFormat == "" {
+		config.TimeFormat = time.RFC3339
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Ensure we have an output writer
+	// Ensure we have an output writer.
 	if config.Output == nil {
 		config.Output = os.Stdout
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
 
 	logger := &StandardLogger{
 		config:  config,
@@ -54,7 +75,7 @@ func NewStandardLogger(factory Factory, config Config) (Logger, error) {
 		isAsync: config.AsyncWrite,
 	}
 
-	// Create metrics collector first
+	// Create metrics collector.
 	metrics, err := factory.CreateMetricsCollector(config)
 	if err != nil {
 		cancel()
@@ -62,7 +83,7 @@ func NewStandardLogger(factory Factory, config Config) (Logger, error) {
 	}
 	logger.metrics = metrics
 
-	// Set up writer
+	// Set up the writer.
 	var baseWriter Writer
 	if config.AsyncWrite {
 		bufferedWriter := NewBufferedWriter(config.Output, config.BufferSize)
@@ -77,20 +98,28 @@ func NewStandardLogger(factory Factory, config Config) (Logger, error) {
 	}
 	logger.writer = baseWriter
 
-	// Create and configure the handler
-	var baseHandler slog.Handler
+	// Create and configure the underlying slog.Handler using the new fields.
 	handlerOpts := &slog.HandlerOptions{
-		Level:     config.MinLevel,
+		Level:     config.Level,
 		AddSource: config.AddSource,
+		// Here we use a custom ReplaceAttr function that uses TimeFormat.
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.TimeKey {
+				t := a.Value.Time()
+				return slog.String(a.Key, t.Format(config.TimeFormat))
+			}
+			return a
+		},
 	}
 
-	if config.JsonFormat {
+	var baseHandler slog.Handler
+	if config.JSON {
 		baseHandler = slog.NewJSONHandler(logger.writer, handlerOpts)
 	} else {
 		baseHandler = slog.NewTextHandler(logger.writer, handlerOpts)
 	}
 
-	// Create error handler
+	// Create error handler.
 	errHandler, err := factory.CreateErrorHandler(config)
 	if err != nil {
 		cancel()
@@ -98,7 +127,7 @@ func NewStandardLogger(factory Factory, config Config) (Logger, error) {
 	}
 	logger.errHandler = errHandler
 
-	// Create handler wrapper
+	// Create handler wrapper.
 	logger.handler = factory.CreateHandlerWrapper(baseHandler, logger.writer)
 
 	return logger, nil

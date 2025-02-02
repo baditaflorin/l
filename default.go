@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"time"
 )
 
 var (
@@ -19,11 +20,26 @@ func init() {
 
 // mustCreateDefaultLogger creates a default logger or panics
 func mustCreateDefaultLogger() Logger {
+	// Set up a default configuration that uses both new and legacy fields.
 	config := Config{
-		Output:     os.Stdout,
+		// New fields
+		Level:       slog.LevelInfo,
+		JSON:        true,
+		ServiceName: "whisper-service",
+		Environment: "development",
+		TimeFormat:  time.RFC3339,
+
+		// Legacy fields
+		MinLevel:   slog.LevelInfo,
 		JsonFormat: true,
-		MinLevel:   slog.LevelInfo, // Fixed: Using slog.LevelInfo instead of LevelInfo
-		AddSource:  true,
+
+		AddSource: true,
+		Output:    os.Stdout,
+		// Other fields can be set to defaults as needed.
+		AsyncWrite:  false,
+		BufferSize:  1024 * 1024,
+		MaxFileSize: 50 * 1024 * 1024, // e.g. 50MB
+		MaxBackups:  7,
 	}
 
 	logger, err := NewStandardLogger(NewStandardFactory(), config)

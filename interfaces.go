@@ -129,6 +129,13 @@ type Metrics struct {
 
 // Config holds logger configuration
 type Config struct {
+	// New fields
+	Level       slog.Level // New: minimum log level
+	JSON        bool       // New: output JSON? (true means JSON format)
+	ServiceName string     // New: service name to include in logs
+	Environment string     // New: e.g. "production" or "development"
+	TimeFormat  string     // New: timestamp format
+
 	MinLevel      slog.Level
 	AddSource     bool
 	JsonFormat    bool
