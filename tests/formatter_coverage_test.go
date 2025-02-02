@@ -4,7 +4,6 @@ import (
 	"github.com/baditaflorin/l"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"log/slog"
 	"testing"
 	"time"
 )
@@ -60,7 +59,7 @@ func TestCreateFormatter(t *testing.T) {
 
 			// Test basic formatting
 			record := l.LogRecord{
-				Level:   slog.LevelInfo,
+				Level:   l.LevelInfo,
 				Message: "test message",
 				Time:    time.Now(),
 			}
@@ -79,32 +78,32 @@ func TestGetLevelColorAllLevels(t *testing.T) {
 
 	testCases := []struct {
 		name          string
-		level         slog.Level
+		level         l.Level
 		expectedColor string
 	}{
 		{
 			name:          "Debug Level",
-			level:         slog.LevelDebug,
+			level:         l.LevelDebug,
 			expectedColor: "\x1b[36m", // Cyan
 		},
 		{
 			name:          "Info Level",
-			level:         slog.LevelInfo,
+			level:         l.LevelInfo,
 			expectedColor: "\x1b[32m", // Green
 		},
 		{
 			name:          "Warn Level",
-			level:         slog.LevelWarn,
+			level:         l.LevelWarn,
 			expectedColor: "\x1b[33m", // Yellow
 		},
 		{
 			name:          "Error Level",
-			level:         slog.LevelError,
+			level:         l.LevelError,
 			expectedColor: "\x1b[31m", // Red
 		},
 		{
 			name:          "Unknown Level",
-			level:         slog.Level(999),
+			level:         l.Level(999),
 			expectedColor: "\x1b[37m", // White
 		},
 	}

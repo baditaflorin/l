@@ -6,7 +6,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,7 +30,7 @@ func TestLoggerIntegration(t *testing.T) {
 		MaxBackups:  3,
 		AddSource:   true,
 		Metrics:     true,
-		MinLevel:    slog.LevelDebug,
+		MinLevel:    l.LevelDebug,
 		Output:      io.Discard,
 	}
 

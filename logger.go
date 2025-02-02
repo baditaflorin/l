@@ -120,20 +120,20 @@ func validateConfig(config *Config) error {
 
 // Logger interface implementation
 func (l *StandardLogger) Info(msg string, args ...any) {
-	l.log(slog.LevelInfo, msg, args...)
+	l.log(LevelInfo, msg, args...)
 }
 
 func (l *StandardLogger) Error(msg string, args ...any) {
 	args = l.enrichErrorArgs(args...)
-	l.log(slog.LevelError, msg, args...)
+	l.log(LevelError, msg, args...)
 }
 
 func (l *StandardLogger) Warn(msg string, args ...any) {
-	l.log(slog.LevelWarn, msg, args...)
+	l.log(LevelWarn, msg, args...)
 }
 
 func (l *StandardLogger) Debug(msg string, args ...any) {
-	l.log(slog.LevelDebug, msg, args...)
+	l.log(LevelDebug, msg, args...)
 }
 
 // Update the log method in StandardLogger to ensure metrics are incremented correctly
@@ -145,7 +145,7 @@ func (l *StandardLogger) log(level slog.Level, msg string, args ...any) {
 	// Use atomic operations for metrics
 	if l.metrics != nil {
 		l.metrics.IncrementTotal()
-		if level == slog.LevelError {
+		if level == LevelError {
 			l.metrics.IncrementErrors()
 			l.metrics.SetLastError(time.Now())
 		}
@@ -1008,13 +1008,13 @@ func (f *TextFormatter) Format(record LogRecord) ([]byte, error) {
 
 func (f *TextFormatter) getLevelColor(level slog.Level) string {
 	switch level {
-	case slog.LevelDebug:
+	case LevelDebug:
 		return "\x1b[36m" // Cyan
-	case slog.LevelInfo:
+	case LevelInfo:
 		return "\x1b[32m" // Green
-	case slog.LevelWarn:
+	case LevelWarn:
 		return "\x1b[33m" // Yellow
-	case slog.LevelError:
+	case LevelError:
 		return "\x1b[31m" // Red
 	default:
 		return "\x1b[37m" // White

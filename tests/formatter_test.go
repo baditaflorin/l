@@ -23,7 +23,7 @@ func TestJSONFormatter(t *testing.T) {
 		{
 			name: "Basic log entry",
 			record: l.LogRecord{
-				Level:   slog.LevelInfo,
+				Level:   l.LevelInfo,
 				Message: "test message",
 				Time:    time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC),
 				Args: []any{
@@ -42,7 +42,7 @@ func TestJSONFormatter(t *testing.T) {
 		{
 			name: "Error with stack trace",
 			record: l.LogRecord{
-				Level:   slog.LevelError,
+				Level:   l.LevelError,
 				Message: "error occurred",
 				Time:    time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC),
 				Args: []any{
@@ -63,7 +63,7 @@ func TestJSONFormatter(t *testing.T) {
 		{
 			name: "Complex nested data",
 			record: l.LogRecord{
-				Level:   slog.LevelInfo,
+				Level:   l.LevelInfo,
 				Message: "nested data",
 				Time:    time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC),
 				Args: []any{
@@ -127,7 +127,7 @@ func TestTextFormatter(t *testing.T) {
 		{
 			name: "Simple log message",
 			record: l.LogRecord{
-				Level:   slog.LevelInfo,
+				Level:   l.LevelInfo,
 				Message: "test message",
 				Time:    time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC),
 				Args: []any{
@@ -146,7 +146,7 @@ func TestTextFormatter(t *testing.T) {
 		{
 			name: "Error message with details",
 			record: l.LogRecord{
-				Level:   slog.LevelError,
+				Level:   l.LevelError,
 				Message: "operation failed",
 				Time:    time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC),
 				Args: []any{
@@ -166,7 +166,7 @@ func TestTextFormatter(t *testing.T) {
 		{
 			name: "Debug message with source",
 			record: l.LogRecord{
-				Level:     slog.LevelDebug,
+				Level:     l.LevelDebug,
 				Message:   "debug info",
 				Time:      time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC),
 				Source:    "main.go:123",
@@ -225,7 +225,7 @@ func TestFormatterOptions(t *testing.T) {
 				Indent:     "",
 			},
 			record: l.LogRecord{
-				Level:   slog.LevelInfo,
+				Level:   l.LevelInfo,
 				Message: "test message",
 				Time:    time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC),
 			},
@@ -241,7 +241,7 @@ func TestFormatterOptions(t *testing.T) {
 				Indent:     "    ",
 			},
 			record: l.LogRecord{
-				Level:   slog.LevelInfo,
+				Level:   l.LevelInfo,
 				Message: "test message",
 				Args:    []any{"key", "value"},
 			},
@@ -262,7 +262,7 @@ func TestFormatterOptions(t *testing.T) {
 				Indent:     "",
 			},
 			record: l.LogRecord{
-				Level:   slog.LevelError,
+				Level:   l.LevelError,
 				Message: "error message",
 			},
 			verify: func(t *testing.T, output string) {
@@ -296,7 +296,7 @@ func TestFormatterEdgeCases(t *testing.T) {
 		{
 			name: "Empty message",
 			record: l.LogRecord{
-				Level:   slog.LevelInfo,
+				Level:   l.LevelInfo,
 				Message: "",
 				Time:    time.Now(),
 			},
@@ -305,7 +305,7 @@ func TestFormatterEdgeCases(t *testing.T) {
 		{
 			name: "Nil args",
 			record: l.LogRecord{
-				Level:   slog.LevelInfo,
+				Level:   l.LevelInfo,
 				Message: "test",
 				Time:    time.Now(),
 				Args:    nil,
@@ -315,7 +315,7 @@ func TestFormatterEdgeCases(t *testing.T) {
 		{
 			name: "Invalid args length",
 			record: l.LogRecord{
-				Level:   slog.LevelInfo,
+				Level:   l.LevelInfo,
 				Message: "test",
 				Time:    time.Now(),
 				Args:    []any{"key"}, // Missing value
@@ -325,7 +325,7 @@ func TestFormatterEdgeCases(t *testing.T) {
 		{
 			name: "Non-string keys in args",
 			record: l.LogRecord{
-				Level:   slog.LevelInfo,
+				Level:   l.LevelInfo,
 				Message: "test",
 				Time:    time.Now(),
 				Args:    []any{123, "value"},

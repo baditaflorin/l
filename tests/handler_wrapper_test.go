@@ -28,7 +28,7 @@ func TestHandlerWrapper(t *testing.T) {
 			logger,
 		)
 
-		enabled := wrapper.Enabled(nil, slog.LevelInfo)
+		enabled := wrapper.Enabled(nil, l.LevelInfo)
 		assert.True(t, enabled)
 
 		// Test WithAttrs

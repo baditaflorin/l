@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"github.com/baditaflorin/l"
-	"log/slog"
 	"sync"
 	"time"
 )
@@ -17,7 +16,7 @@ func main() {
 		JsonFormat:  true,
 		AsyncWrite:  true,
 		BufferSize:  1024 * 1024, // 1MB buffer
-		MinLevel:    slog.LevelInfo,
+		MinLevel:    l.LevelInfo,
 		AddSource:   true,
 		MaxBackups:  5,
 		Metrics:     true,

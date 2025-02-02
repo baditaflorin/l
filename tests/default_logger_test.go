@@ -6,7 +6,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"io"
-	"log/slog"
 	"testing"
 )
 
@@ -17,7 +16,7 @@ func TestDefaultLogger(t *testing.T) {
 	config := l.Config{
 		Output:     io.Discard,
 		JsonFormat: true,
-		MinLevel:   slog.LevelInfo,
+		MinLevel:   l.LevelInfo,
 		AddSource:  true,
 	}
 
@@ -56,7 +55,7 @@ func TestDefaultLogger(t *testing.T) {
 		config := l.Config{
 			Output:     io.Discard,
 			JsonFormat: true,
-			MinLevel:   slog.LevelInfo,
+			MinLevel:   l.LevelInfo,
 			AddSource:  true,
 		}
 
