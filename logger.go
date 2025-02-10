@@ -171,6 +171,11 @@ func (l *StandardLogger) log(level slog.Level, msg string, args ...any) {
 		return
 	}
 
+	// Add this check to filter out messages that are below the configured level.
+	if !l.handler.Enabled(l.ctx, level) {
+		return
+	}
+
 	// Use atomic operations for Metrics
 	if l.Metrics != nil {
 		l.Metrics.IncrementTotal()
@@ -201,7 +206,7 @@ func (l *StandardLogger) log(level slog.Level, msg string, args ...any) {
 		}
 	}
 
-	// Handle the log
+	// Process the log record
 	err := l.errHandler.WithRecovery(func() error {
 		if l.isAsync {
 			go func() {
@@ -213,7 +218,6 @@ func (l *StandardLogger) log(level slog.Level, msg string, args ...any) {
 		}
 		return l.handler.Handle(l.ctx, r)
 	})
-
 	if err != nil {
 		l.errHandler.Handle(err)
 	}
